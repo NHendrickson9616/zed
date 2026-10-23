@@ -1,0 +1,101 @@
+name: Cherry-pick my Zed PR
+run-name: "Cherry-pick Zed PR #${{ inputs.pr_number }} onto personal"
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number in zed-industries/zed
+        required: true
+        type: number
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: update-personal-branch
+  cancel-in-progress: false
+
+jobs:
+  cherry-pick:
+    if: github.repository == 'NHendrickson9616/zed'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out personal branch
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          ref: personal
+          fetch-depth: 0
+
+      - name: Cherry-pick pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          author="$(gh pr view "$PR_NUMBER" \
+            --repo zed-industries/zed \
+            --json author \
+            --jq .author.login)"
+          if [ "$author" != "NHendrickson9616" ]; then
+            echo "Zed PR #$PR_NUMBER belongs to $author, not NHendrickson9616"
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/zed-industries/zed.git
+          git fetch upstream "pull/$PR_NUMBER/head:refs/remotes/upstream/pr-$PR_NUMBER"
+
+          mapfile -t commits < <(gh api \
+            --paginate \
+            "repos/zed-industries/zed/pulls/$PR_NUMBER/commits" \
+            --jq '.[].sha')
+          if [ "${#commits[@]}" -eq 0 ]; then
+            echo "Zed PR #$PR_NUMBER has no commits"
+            exit 1
+          fi
+
+          for commit in "${commits[@]}"; do
+            if git merge-base --is-ancestor "$commit" HEAD; then
+              echo "Skipping $commit because it is already in personal"
+              continue
+            fi
+
+            if git cherry-pick "$commit"; then
+              continue
+            fi
+
+            if git diff --quiet && git diff --cached --quiet; then
+              echo "Skipping $commit because its patch is already in personal"
+              git cherry-pick --skip
+            else
+              echo "Cherry-picking $commit produced conflicts"
+              exit 1
+            fi
+          done
+
+          git push origin HEAD:personal
+
+      - name: Report cherry-pick failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          RUN_URL: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Personal branch cherry-pick failed for Zed PR #$PR_NUMBER"
+          issue_number="$(gh issue list \
+            --repo "$GITHUB_REPOSITORY" \
+            --state open \
+            --json number,title \
+            --jq ".[] | select(.title == \"$title\") | .number" \
+            | sed -n '1p')"
+          body="Zed PR #$PR_NUMBER could not be cherry-picked onto personal. Resolve the conflict locally and rerun the workflow.\n\nWorkflow run: $RUN_URL"
+
+          if [ -n "$issue_number" ]; then
+            gh issue comment "$issue_number" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi
