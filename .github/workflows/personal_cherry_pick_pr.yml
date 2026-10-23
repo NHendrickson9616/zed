@@ -28,6 +28,23 @@ jobs:
         with:
           ref: personal
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Configure push authentication
+        env:
+          PERSONAL_DEPLOY_KEY: ${{ secrets.PERSONAL_DEPLOY_KEY }}
+        run: |
+          if [ -z "$PERSONAL_DEPLOY_KEY" ]; then
+            echo "The PERSONAL_DEPLOY_KEY secret is not configured"
+            exit 1
+          fi
+
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$PERSONAL_DEPLOY_KEY" > "$HOME/.ssh/zed-personal-sync"
+          chmod 600 "$HOME/.ssh/zed-personal-sync"
+          ssh-keyscan -t ed25519 github.com >> "$HOME/.ssh/known_hosts"
+          git remote set-url origin git@github.com:NHendrickson9616/zed.git
+          git config core.sshCommand "ssh -i $HOME/.ssh/zed-personal-sync -o IdentitiesOnly=yes"
 
       - name: Cherry-pick pull request
         env:
