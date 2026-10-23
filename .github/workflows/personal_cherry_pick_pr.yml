@@ -58,6 +58,12 @@ jobs:
           fi
 
           for commit in "${commits[@]}"; do
+            parent_count="$(git rev-list --parents -n 1 "$commit" | awk '{ print NF - 1 }')"
+            if [ "$parent_count" -gt 1 ]; then
+              echo "Skipping merge commit $commit"
+              continue
+            fi
+
             if git merge-base --is-ancestor "$commit" HEAD; then
               echo "Skipping $commit because it is already in personal"
               continue
@@ -67,7 +73,9 @@ jobs:
               continue
             fi
 
-            if git diff --quiet && git diff --cached --quiet; then
+            if git rev-parse --verify --quiet CHERRY_PICK_HEAD >/dev/null \
+              && git diff --quiet \
+              && git diff --cached --quiet; then
               echo "Skipping $commit because its patch is already in personal"
               git cherry-pick --skip
             else
